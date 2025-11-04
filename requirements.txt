@@ -1,0 +1,7 @@
+streamlit>=1.20
+sentence-transformers>=2.2
+numpy
+faiss-cpu
+PyMuPDF
+google-generativeai
+python-dotenv
