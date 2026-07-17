@@ -186,94 +186,15 @@ class PDFAssistant:
         except Exception as e:
             return None, f"Error searching documents: {str(e)}"
 
-    def answer_question(self, question, conversation_history=None, difficulty_level="normal"):
+    def answer_question(self, question, conversation_history=None):
         """Top-level QA: search PDFs first, then generate answer via Gemini (or AI fallback)."""
-        # treat summarization specially
-        if self._is_summarization_request(question):
-            return self._handle_summarization(question, conversation_history, difficulty_level)
-
         # search PDFs
         pdf_content, pdf_status = self.search_documents(question)
 
         # generate response (PDF-grounded if pdf_content present)
-        return self._generate_response(question, pdf_content or "", "PDF" if pdf_content else "AI", pdf_status, conversation_history, difficulty_level)
+        return self._generate_response(question, pdf_content or "", "PDF" if pdf_content else "AI", pdf_status, conversation_history)
 
-    def _is_summarization_request(self, question):
-        summarization_keywords = [
-            "summarize", "summary", "summarise", "overview", "outline",
-            "key points", "main points", "brief", "gist", "recap",
-            "entire pdf", "whole document", "complete unit", "full chapter",
-            "all topics", "everything about", "comprehensive overview"
-        ]
-        q = question.lower()
-        return any(k in q for k in summarization_keywords)
-
-    def _handle_summarization(self, question, conversation_history=None, difficulty_level="normal"):
-        if not self.has_documents:
-            return {
-                'answer': "I don't have any documents uploaded to summarize. Please upload your PDFs first.",
-                'source_type': 'AI',
-                'pdf_status': 'No documents available',
-                'method': 'Summarization Assistant',
-                'difficulty': difficulty_level,
-                'is_summary': True
-            }
-
-        try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-
-            # limited document content to avoid token issues
-            doc_excerpt = self.documents_content[:8000]
-
-            # conversation context
-            context_prompt = ""
-            if conversation_history:
-                recent_context = conversation_history[-2:]
-                context_prompt = "\n\nPREVIOUS CONVERSATION CONTEXT:\n"
-                for i, chat in enumerate(recent_context):
-                    context_prompt += f"Q{i+1}: {chat.get('question','')}\nA{i+1}: {chat.get('answer','')[:150]}...\n"
-
-            difficulty_instructions = {
-                "simple": "Create a simple, easy-to-understand summary using bullet points. Avoid heavy jargon.",
-                "normal": "Provide a comprehensive summary with key concepts and important details organized clearly.",
-                "detailed": "Give a thorough, detailed summary covering main concepts and subtopics with examples."
-            }
-            difficulty_instruction = difficulty_instructions.get(difficulty_level, difficulty_instructions["normal"])
-
-            prompt = f"""You are an academic tutor. Use the student's documents below and produce a structured summary.
-
-{context_prompt}
-
-DOCUMENT CONTENT (excerpt):
-{doc_excerpt}
-
-SUMMARY REQUEST: {question}
-
-INSTRUCTIONS: {difficulty_instruction}
-
-Format: Headings, bullet points, definitions, examples, and exam-focused notes.
-"""
-
-            response = model.generate_content(prompt)
-            return {
-                'answer': response.text,
-                'source_type': 'PDF',
-                'pdf_status': f'Summarized content from {len(self.document_chunks)} document sections',
-                'method': 'PDF Summarization (AI Enhanced)',
-                'difficulty': difficulty_level,
-                'is_summary': True
-            }
-        except Exception as e:
-            return {
-                'answer': f"Failed to create full summary: {e}. Try summarizing a specific chapter or topic.",
-                'source_type': 'AI',
-                'pdf_status': f'Error in summarization: {str(e)}',
-                'method': 'Summarization Fallback',
-                'difficulty': difficulty_level,
-                'is_summary': True
-            }
-
-    def _generate_response(self, question, context, source_type="AI", pdf_status="", conversation_history=None, difficulty_level="normal"):
+    def _generate_response(self, question, context, source_type="AI", pdf_status="", conversation_history=None):
         try:
             model = genai.GenerativeModel('gemini-1.5-flash')
 
@@ -286,34 +207,23 @@ Format: Headings, bullet points, definitions, examples, and exam-focused notes.
                     context_prompt += f"Q{i+1}: {chat.get('question','')}\nA{i+1}: {chat.get('answer','')[:200]}...\n"
                 context_prompt += "\nCURRENT QUESTION:\n"
 
-            difficulty_instructions = {
-                "simple": "Explain like I'm a beginner. Use analogies and simple examples.",
-                "normal": "Provide a clear, comprehensive explanation with examples.",
-                "detailed": "Give a thorough, technical explanation with advanced concepts."
-            }
-            difficulty_instruction = difficulty_instructions.get(difficulty_level, difficulty_instructions["normal"])
-
             if source_type == "PDF" and context:
-                prompt = f"""You are a friendly AI tutor.
+                prompt = f"""You are a helpful assistant answering questions about the user's uploaded documents.
 
 {context_prompt}
 
-CONTENT FROM STUDENT'S DOCUMENTS:
+DOCUMENT CONTENT:
 {context}
 
 Question: {question}
 
-Instructions: {difficulty_instruction}
-
-Answer using the document content first, then add clarifications if needed. Be concise and student-friendly."""
+Answer using the document content first, then add clarifications if needed. Be concise and clear."""
             else:
-                prompt = f"""You are a friendly AI tutor.
+                prompt = f"""You are a helpful assistant answering questions.
 
 {context_prompt}
 
 Question: {question}
-
-Instructions: {difficulty_instruction}
 
 Answer clearly and helpfully."""
             response = model.generate_content(prompt)
@@ -321,25 +231,21 @@ Answer clearly and helpfully."""
                 'answer': response.text,
                 'source_type': source_type,
                 'pdf_status': pdf_status,
-                'method': 'PDF-grounded' if source_type == 'PDF' else 'AI Tutor',
-                'difficulty': difficulty_level,
-                'is_summary': False
+                'method': 'Document Search' if source_type == 'PDF' else 'General Knowledge'
             }
         except Exception as e:
             # fallback to simple local knowledge if LLM call fails
-            fallback_text = f"Sorry, the remote LLM failed: {e}. I can still try to explain key ideas locally if you'd like."
+            fallback_text = f"Sorry, the remote LLM failed: {e}."
             return {
                 'answer': fallback_text,
                 'source_type': 'AI',
                 'pdf_status': pdf_status,
-                'method': 'Fallback',
-                'difficulty': difficulty_level,
-                'is_summary': False
+                'method': 'Fallback'
             }
 
 # ---------- Streamlit app UI ----------
 def main():
-    st.set_page_config(page_title="🧠 PDF AI Assistant", layout="wide", initial_sidebar_state="collapsed")
+    st.set_page_config(page_title="Document Chat Assistant", layout="wide", initial_sidebar_state="collapsed")
 
     st.markdown("""
     <style>
@@ -369,7 +275,7 @@ def main():
         st.error(f"❌ API configuration error: {e}")
         st.stop()
 
-    st.title("🧠 PDF AI Assistant")
+    st.title("Document Chat Assistant")
     st.markdown("*Upload PDFs and ask questions — I will search your documents first, then use AI knowledge.*")
     st.success("✅ System loaded")
 
@@ -398,18 +304,12 @@ def main():
                 st.error("❌ Could not process PDFs.")
 
     # Chat interface
-    st.header("💬 Chat with your AI Tutor")
-    difficulty = st.selectbox(
-        "Choose explanation level:",
-        ["simple", "normal", "detailed"],
-        index=1,
-        format_func=lambda x: {"simple":"🟢 Simple","normal":"🟡 Normal","detailed":"🔴 Detailed"}[x]
-    )
+    st.header("💬 Chat with your Document Assistant")
 
     question = st.text_area(
         "Type your message:",
         value=st.session_state.get('current_q',''),
-        placeholder="Ask questions, request summaries, or ask about your PDFs...",
+        placeholder="Ask questions about your PDFs...",
         height=120
     )
 
@@ -417,37 +317,27 @@ def main():
         with st.spinner("Searching PDFs and generating answer..."):
             response = st.session_state.assistant.answer_question(
                 question,
-                conversation_history=st.session_state.chat_history,
-                difficulty_level=difficulty
+                conversation_history=st.session_state.chat_history
             )
 
             # Display sources / status
-            if response.get('is_summary', False):
-                if response.get('source_type') == 'PDF':
-                    st.success("📋 Summary (from PDFs)")
-                    st.info(response.get('pdf_status', 'Summarized document content'))
-                else:
-                    st.warning("⚠ No PDFs available for summarization")
+            if st.session_state.assistant.has_documents and response.get('source_type') == 'PDF':
+                st.success("✅ Answer source: Your PDFs")
+                st.info("The answer below is based on content found in your uploaded PDFs.")
+                pdf_content, _ = st.session_state.assistant.search_documents(question)
+                if pdf_content:
+                    with st.expander("📋 PDF content used for this answer"):
+                        st.text(pdf_content[:2000] + ("..." if len(pdf_content) > 2000 else ""))
             else:
-                if st.session_state.assistant.has_documents and response.get('source_type') == 'PDF':
-                    st.success("✅ Answer source: Your PDFs")
-                    st.info("The answer below is based on content found in your uploaded PDFs.")
-                    pdf_content, _ = st.session_state.assistant.search_documents(question)
-                    if pdf_content:
-                        with st.expander("📋 PDF content used for this answer"):
-                            st.text(pdf_content[:2000] + ("..." if len(pdf_content) > 2000 else ""))
-                else:
-                    if not st.session_state.assistant.has_documents:
-                        st.info("📝 No PDFs uploaded.")
-                    st.info("Answer source: AI general knowledge")
+                if not st.session_state.assistant.has_documents:
+                    st.info("📝 No PDFs uploaded.")
+                st.info("Answer source: AI general knowledge")
 
             # show answer
-            if response.get('is_summary', False):
-                st.subheader("📋 Summary")
-            elif response.get('source_type') == 'PDF':
-                st.subheader("🎯 AI Tutor Response (From Your PDFs)")
+            if response.get('source_type') == 'PDF':
+                st.subheader("🎯 Response (from your documents)")
             else:
-                st.subheader("🎯 AI Tutor Response (From Knowledge Base)")
+                st.subheader("🎯 Response (general knowledge)")
 
             st.write(response['answer'])
 
@@ -457,9 +347,7 @@ def main():
                 'answer': response['answer'],
                 'source_type': response.get('source_type', 'AI'),
                 'method': response.get('method', ''),
-                'difficulty': response.get('difficulty', 'normal'),
-                'timestamp': time.time(),
-                'is_summary': response.get('is_summary', False)
+                'timestamp': time.time()
             })
             # clear current_q placeholder
             st.session_state.current_q = ""
@@ -469,11 +357,10 @@ def main():
         st.header("💬 Chat History")
         for i, chat in enumerate(reversed(st.session_state.chat_history[-8:])):
             idx = len(st.session_state.chat_history) - 1 - i
-            label = "📋 Summary" if chat.get('is_summary') else "❓ Question"
-            with st.expander(f"{label}: {chat['question'][:80]}"):
+            with st.expander(f"❓ Question: {chat['question'][:80]}"):
                 st.write(f"*You:* {chat['question']}")
                 st.write(f"*AI:* {chat['answer']}")
-                st.caption(f"Source: {chat.get('source_type','AI')} | Level: {chat.get('difficulty','normal')}")
+                st.caption(f"Source: {chat.get('source_type','AI')} | Method: {chat.get('method', '')}")
 
     st.write("---")
     col1, col2 = st.columns([1, 1])
