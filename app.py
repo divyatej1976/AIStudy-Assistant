@@ -16,6 +16,9 @@ import faiss
 import numpy as np
 import google.generativeai as genai
 from dotenv import load_dotenv
+import uuid
+import shutil
+from werkzeug.utils import secure_filename
 
 # Optional imports (handled gracefully)
 try:
@@ -34,11 +37,10 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "") or st.secrets.get("OPENAI_API_K
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-UPLOAD_FOLDER = "uploaded_pdfs"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
 class PDFAssistant:
-    def __init__(self):
+    def __init__(self, session_id):
+        self.upload_folder = os.path.join("uploaded_pdfs", session_id)
+        os.makedirs(self.upload_folder, exist_ok=True)
         # core state
         self.documents_content = ""
         self.has_documents = False
@@ -65,18 +67,19 @@ class PDFAssistant:
 
         # save uploaded files (avoid overwriting existing same-named files)
         for pdf_file in pdf_files:
-            save_path = os.path.join(UPLOAD_FOLDER, pdf_file.name)
+            safe_name = secure_filename(pdf_file.name)
+            save_path = os.path.join(self.upload_folder, safe_name)
             if not os.path.exists(save_path):
                 try:
                     with open(save_path, "wb") as f:
                         f.write(pdf_file.getbuffer())
                 except Exception as e:
-                    st.warning(f"Could not save {pdf_file.name}: {e}")
+                    st.warning(f"Could not save {safe_name}: {e}")
 
         # extract text and chunk
-        for filename in os.listdir(UPLOAD_FOLDER):
+        for filename in os.listdir(self.upload_folder):
             if filename.lower().endswith('.pdf'):
-                file_path = os.path.join(UPLOAD_FOLDER, filename)
+                file_path = os.path.join(self.upload_folder, filename)
                 text = self._extract_pdf_text(file_path)
                 if text:
                     all_text += f"\n\n=== From {filename} ===\n{text}"
@@ -371,8 +374,10 @@ def main():
     st.success("✅ System loaded")
 
     # initialize assistant in session state
+    if 'session_id' not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
     if 'assistant' not in st.session_state:
-        st.session_state.assistant = PDFAssistant()
+        st.session_state.assistant = PDFAssistant(st.session_state.session_id)
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
 
@@ -470,8 +475,22 @@ def main():
                 st.write(f"*AI:* {chat['answer']}")
                 st.caption(f"Source: {chat.get('source_type','AI')} | Level: {chat.get('difficulty','normal')}")
 
+    st.write("---")
+    col1, col2 = st.columns([1, 1])
+    with col1:
         if st.button("🗑 Clear History"):
             st.session_state.chat_history = []
+            st.experimental_rerun()
+    with col2:
+        if st.button("🗑 Clear Documents"):
+            if os.path.exists(st.session_state.assistant.upload_folder):
+                shutil.rmtree(st.session_state.assistant.upload_folder, ignore_errors=True)
+            os.makedirs(st.session_state.assistant.upload_folder, exist_ok=True)
+            st.session_state.assistant.documents_content = ""
+            st.session_state.assistant.has_documents = False
+            st.session_state.assistant.document_chunks = []
+            st.session_state.assistant.embeddings = None
+            st.session_state.assistant.index = None
             st.experimental_rerun()
 
 if __name__ == "__main__":
